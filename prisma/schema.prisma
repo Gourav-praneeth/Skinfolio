@@ -1,0 +1,183 @@
+// Skinfolio data model
+// Default: SQLite for local/dev. For production Postgres, set:
+//   provider = "postgresql"
+//   url      = env("DATABASE_URL")
+// See README for switching providers.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+  profile  Profile?
+  products Product[]
+  routines RoutineStep[]
+  completions RoutineCompletion[]
+  journalEntries JournalEntry[]
+  chatThreads ChatThread[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Profile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  skinType        String? // dry | oily | combination | normal | unsure
+  concerns        String   @default("[]") // JSON array
+  allergies       String   @default("[]") // JSON array of tags
+  pregnantNursing Boolean  @default(false)
+  pregnantNote    String?
+  usesRetinoid    Boolean  @default(false)
+  retinoidNote    String?
+  climate         String? // humid | dry | cold | variable
+  city            String?
+  goals           String   @default("[]") // JSON array
+  goalsNote       String?
+  disclaimerAck   Boolean  @default(false)
+  onboardingDone  Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  brand       String?
+  category    String   @default("other") // cleanser | treatment | moisturizer | spf | other
+  ingredients String? // INCI / key ingredients paste
+  notes       String?
+  openedDate  String? // YYYY-MM-DD — when the product was opened / put into use
+  expiryDate  String? // YYYY-MM-DD — PAO / labelled expiry
+  active      Boolean  @default(true)
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  routineSteps RoutineStep[]
+
+  @@index([userId])
+}
+
+model RoutineStep {
+  id        String   @id @default(cuid())
+  userId    String
+  period    String // AM | PM
+  order     Int
+  label     String? // free-text step when no product
+  productId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([userId, period])
+}
+
+model RoutineCompletion {
+  id           String   @id @default(cuid())
+  userId       String
+  date         String // YYYY-MM-DD
+  period       String // AM | PM
+  status       String   @default("done") // done | skipped
+  skipReason   String?
+  completedAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date, period])
+  @@index([userId, date])
+}
+
+model JournalEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  date      String // YYYY-MM-DD
+  notes     String?
+  tags      String   @default("[]") // calm | irritated | oily | dry | breakout
+  photoPath String? // local stub path or object-storage key
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+model ChatThread {
+  id        String        @id @default(cuid())
+  userId    String
+  title     String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  messages  ChatMessage[]
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  threadId  String
+  role      String // user | assistant | system
+  content   String
+  createdAt DateTime @default(now())
+
+  thread ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+}

@@ -4,15 +4,44 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { todayKey } from "@/lib/dates";
+import { moveStep, applyOrderedIds } from "@/lib/routine-order";
+import {
+  planMoisturizerReplace,
+  type MoisturizerStep,
+} from "@/lib/moisturizer-replace";
 
-export async function addRoutineStepAction(formData: FormData) {
+export type AddStepResult =
+  | { ok: true; mode: "added" | "replaced" }
+  | { ok: false; error: string; needsConfirmation?: boolean; period?: string };
+
+export async function addRoutineStepAction(formData: FormData): Promise<AddStepResult | void> {
   const user = await requireUser();
   const period = String(formData.get("period") ?? "AM");
   if (period !== "AM" && period !== "PM") throw new Error("Invalid period");
 
   const productId = String(formData.get("productId") || "") || null;
   const label = String(formData.get("label") || "").trim() || null;
+  const confirmMultiple = formData.get("confirmReplaceMultiple") === "on";
   if (!productId && !label) throw new Error("Pick a product or enter a step label.");
+
+  if (productId) {
+    const product = await prisma.product.findFirst({
+      where: { id: productId, userId: user.id, archived: false },
+    });
+    if (!product) throw new Error("Product not found.");
+
+    if (product.category === "moisturizer") {
+      const result = await replaceOrInsertMoisturizer(
+        user.id,
+        period,
+        product.id,
+        confirmMultiple,
+      );
+      revalidatePath("/routine");
+      revalidatePath("/home");
+      return result;
+    }
+  }
 
   const max = await prisma.routineStep.aggregate({
     where: { userId: user.id, period },
@@ -31,12 +60,149 @@ export async function addRoutineStepAction(formData: FormData) {
 
   revalidatePath("/routine");
   revalidatePath("/home");
+  return { ok: true, mode: "added" };
+}
+
+async function replaceOrInsertMoisturizer(
+  userId: string,
+  period: "AM" | "PM",
+  productId: string,
+  confirmMultiple: boolean,
+): Promise<AddStepResult> {
+  const steps = await prisma.routineStep.findMany({
+    where: { userId, period },
+    include: { product: true },
+    orderBy: { order: "asc" },
+  });
+
+  const mapped: MoisturizerStep[] = steps.map((s) => ({
+    id: s.id,
+    order: s.order,
+    productId: s.productId,
+    category: s.product?.category ?? null,
+    label: s.label,
+  }));
+
+  const plan = planMoisturizerReplace(mapped, { confirmMultiple });
+
+  if (plan.action === "insert") {
+    const max = steps.reduce((m, s) => Math.max(m, s.order), -1);
+    await prisma.routineStep.create({
+      data: {
+        userId,
+        period,
+        order: max + 1,
+        productId,
+        label: null,
+      },
+    });
+    return { ok: true, mode: "added" };
+  }
+
+  if (plan.requiresConfirmation) {
+    return {
+      ok: false,
+      error: `Multiple moisturizers in ${period}. Confirm to replace the primary slot and remove extras.`,
+      needsConfirmation: true,
+      period,
+    };
+  }
+
+  await prisma.routineStep.updateMany({
+    where: { id: plan.targetStepId, userId },
+    data: { productId, label: null },
+  });
+
+  if (plan.extraMoisturizerStepIds.length) {
+    await prisma.routineStep.deleteMany({
+      where: { userId, id: { in: plan.extraMoisturizerStepIds } },
+    });
+    const remaining = await prisma.routineStep.findMany({
+      where: { userId, period },
+      orderBy: { order: "asc" },
+    });
+    for (let i = 0; i < remaining.length; i++) {
+      await prisma.routineStep.update({
+        where: { id: remaining[i]!.id },
+        data: { order: i },
+      });
+    }
+  }
+
+  return { ok: true, mode: "replaced" };
 }
 
 export async function removeRoutineStepAction(formData: FormData) {
   const user = await requireUser();
   const id = String(formData.get("id") ?? "");
   await prisma.routineStep.deleteMany({ where: { id, userId: user.id } });
+  revalidatePath("/routine");
+  revalidatePath("/home");
+}
+
+export async function moveRoutineStepAction(formData: FormData) {
+  const user = await requireUser();
+  const id = String(formData.get("id") ?? "");
+  const direction = String(formData.get("direction") ?? "");
+  if (direction !== "up" && direction !== "down") {
+    throw new Error("Invalid direction");
+  }
+
+  const step = await prisma.routineStep.findFirst({
+    where: { id, userId: user.id },
+  });
+  if (!step) throw new Error("Step not found");
+
+  const siblings = await prisma.routineStep.findMany({
+    where: { userId: user.id, period: step.period },
+    orderBy: { order: "asc" },
+  });
+
+  const next = moveStep(
+    siblings.map((s) => ({ id: s.id, order: s.order })),
+    id,
+    direction,
+  );
+
+  for (const s of next) {
+    await prisma.routineStep.update({
+      where: { id: s.id },
+      data: { order: s.order },
+    });
+  }
+
+  revalidatePath("/routine");
+  revalidatePath("/home");
+}
+
+/** Persist an explicit order list for a period (drag-and-drop). */
+export async function reorderRoutineStepsAction(formData: FormData) {
+  const user = await requireUser();
+  const period = String(formData.get("period") ?? "");
+  if (period !== "AM" && period !== "PM") throw new Error("Invalid period");
+
+  const orderedIds = String(formData.get("orderedIds") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const siblings = await prisma.routineStep.findMany({
+    where: { userId: user.id, period },
+    orderBy: { order: "asc" },
+  });
+
+  const next = applyOrderedIds(
+    siblings.map((s) => ({ id: s.id, order: s.order })),
+    orderedIds,
+  );
+
+  for (const s of next) {
+    await prisma.routineStep.update({
+      where: { id: s.id },
+      data: { order: s.order },
+    });
+  }
+
   revalidatePath("/routine");
   revalidatePath("/home");
 }

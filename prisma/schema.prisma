@@ -98,6 +98,8 @@ model Product {
   category    String   @default("other") // cleanser | treatment | moisturizer | spf | other
   ingredients String? // INCI / key ingredients paste
   notes       String?
+  openedDate  String? // YYYY-MM-DD — when the product was opened / put into use
+  expiryDate  String? // YYYY-MM-DD — PAO / labelled expiry
   active      Boolean  @default(true)
   archived    Boolean  @default(false)
   createdAt   DateTime @default(now())

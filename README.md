@@ -9,7 +9,7 @@ Personal **skincare coach + journal** — brand-neutral guidance grounded in *yo
 - **Auth** — Auth.js (NextAuth v5) email + password; Prisma user model
 - **Onboarding** — disclaimer + skin profile / constraints (persisted)
 - **Home** — today’s AM/PM status, coach & journal CTAs, Skinfolio brand
-- **Routine** — shelf CRUD, AM/PM checklist, templates, clash hints
+- **Routine** — shelf CRUD (opened/expiry dates), AM/PM checklist with ↑↓ reorder, moisturizer replace-on-add, templates, clash hints
 - **Journal** — notes + tags + optional photo upload
 - **Chat** — server-side AI coach with profile/shelf/journal context; offline fallback without `OPENAI_API_KEY`
 - **Product check** — paste name/INCI vs profile (allergies, pregnancy gate)
@@ -106,12 +106,21 @@ MVP stores files under `uploads/journal/<userId>/` and serves them privately via
 - Medical red-flag language redirects to clinician care
 - No monetization / paywall UI
 
+## Tests
+
+```bash
+npm test
+```
+
+Vitest unit tests cover product ownership dates (missing/invalid/expired/expiry-before-opened), routine reorder persistence helpers, and moisturizer replace-on-add (insert / single replace / multi-confirm).
+
 ## Scripts
 
 | Script | Purpose |
 | --- | --- |
 | `npm run dev` | Local dev server |
 | `npm run build` | Prisma generate + Next production build |
+| `npm test` | Vitest unit tests (CI-friendly) |
 | `npm run db:push` | Sync schema (dev) |
 | `npm run db:studio` | Prisma Studio |
 

@@ -3,17 +3,18 @@ import { requireOnboarded } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { todayKey } from "@/lib/dates";
 import { DisclaimerStrip } from "@/components/Disclaimer";
+import { archiveProductAction } from "@/actions/shelf";
 import {
-  addProductAction,
-  archiveProductAction,
-} from "@/actions/shelf";
-import {
-  addRoutineStepAction,
   removeRoutineStepAction,
   completeRoutineAction,
   applyRoutineTemplateAction,
+  moveRoutineStepAction,
 } from "@/actions/routine";
 import { CLASH_PAIRS } from "@/lib/constants";
+import { isMoisturizerStep } from "@/lib/moisturizer-replace";
+import { ProductOwnership } from "@/components/ProductOwnership";
+import { AddRoutineStepForm } from "@/components/AddRoutineStepForm";
+import { AddShelfForm } from "@/components/AddShelfForm";
 
 export default async function RoutinePage({
   searchParams,
@@ -52,6 +53,11 @@ export default async function RoutinePage({
   const am = steps.filter((s) => s.period === "AM");
   const pm = steps.filter((s) => s.period === "PM");
   const clashHints = detectClashes(steps.map((s) => s.product?.ingredients ?? s.label ?? ""));
+  const productOptions = products.map((p) => ({
+    id: p.id,
+    name: p.name,
+    category: p.category,
+  }));
 
   return (
     <main className="space-y-6">
@@ -61,7 +67,7 @@ export default async function RoutinePage({
         </p>
         <h1 className="font-display mt-1 text-3xl text-[var(--brand-deep)]">Routine</h1>
         <p className="mt-2 text-sm text-[var(--ink-soft)]">
-          Build AM/PM from what you own. Mark today in under 30 seconds.
+          Build AM/PM from what you own. Mark today in under 30 seconds. Reorder steps with ↑↓.
         </p>
       </header>
 
@@ -103,8 +109,8 @@ export default async function RoutinePage({
         </form>
       </section>
 
-      <RoutineEditor period="AM" steps={am} products={products} />
-      <RoutineEditor period="PM" steps={pm} products={products} />
+      <RoutineEditor period="AM" steps={am} products={productOptions} />
+      <RoutineEditor period="PM" steps={pm} products={productOptions} />
 
       <section className="surface space-y-4 p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
@@ -123,63 +129,37 @@ export default async function RoutinePage({
           </form>
         </div>
 
-        <form action={addProductAction} className="grid gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="label" htmlFor="name">
-              Product name
-            </label>
-            <input className="field" id="name" name="name" required placeholder="Cleanser you already own" />
-          </div>
-          <div>
-            <label className="label" htmlFor="brand">
-              Brand (optional)
-            </label>
-            <input className="field" id="brand" name="brand" />
-          </div>
-          <div>
-            <label className="label" htmlFor="category">
-              Category
-            </label>
-            <select className="field" id="category" name="category" defaultValue="cleanser">
-              <option value="cleanser">Cleanser</option>
-              <option value="treatment">Treatment</option>
-              <option value="moisturizer">Moisturizer</option>
-              <option value="spf">SPF</option>
-              <option value="other">Other</option>
-            </select>
-          </div>
-          <div className="sm:col-span-2">
-            <label className="label" htmlFor="ingredients">
-              Key ingredients / INCI (optional)
-            </label>
-            <textarea className="field min-h-20" id="ingredients" name="ingredients" />
-          </div>
-          <button className="btn btn-primary sm:col-span-2" type="submit">
-            Add to shelf
-          </button>
-        </form>
+        <AddShelfForm />
 
-        <ul className="space-y-2">
+        <ul className="space-y-3">
           {products.map((p) => (
             <li
               key={p.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface-solid)] px-3 py-3"
+              className="rounded-2xl border border-[var(--line)] bg-[var(--surface-solid)] px-3 py-3"
             >
-              <div>
-                <p className="font-semibold">
-                  {p.name}
-                  {p.brand ? (
-                    <span className="font-normal text-[var(--muted)]"> · {p.brand}</span>
-                  ) : null}
-                </p>
-                <p className="text-xs uppercase tracking-wide text-[var(--muted)]">{p.category}</p>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="font-semibold">
+                    {p.name}
+                    {p.brand ? (
+                      <span className="font-normal text-[var(--muted)]"> · {p.brand}</span>
+                    ) : null}
+                  </p>
+                  <p className="text-xs uppercase tracking-wide text-[var(--muted)]">{p.category}</p>
+                </div>
+                <form action={archiveProductAction}>
+                  <input type="hidden" name="id" value={p.id} />
+                  <button className="btn btn-ghost text-xs" type="submit">
+                    Archive
+                  </button>
+                </form>
               </div>
-              <form action={archiveProductAction}>
-                <input type="hidden" name="id" value={p.id} />
-                <button className="btn btn-ghost text-xs" type="submit">
-                  Archive
-                </button>
-              </form>
+              <ProductOwnership
+                productId={p.id}
+                openedDate={p.openedDate}
+                expiryDate={p.expiryDate}
+                today={date}
+              />
             </li>
           ))}
           {!products.length ? (
@@ -247,9 +227,24 @@ function RoutineEditor({
   products,
 }: {
   period: "AM" | "PM";
-  steps: Array<{ id: string; label: string | null; product: { name: string } | null }>;
-  products: Array<{ id: string; name: string }>;
+  steps: Array<{
+    id: string;
+    order: number;
+    label: string | null;
+    product: { name: string; category: string } | null;
+  }>;
+  products: Array<{ id: string; name: string; category: string }>;
 }) {
+  const moisturizerCount = steps.filter((s) =>
+    isMoisturizerStep({
+      id: s.id,
+      order: s.order,
+      productId: null,
+      category: s.product?.category ?? null,
+      label: s.label,
+    }),
+  ).length;
+
   return (
     <section className="surface space-y-3 p-5">
       <h2 className="font-display text-xl">{period} steps</h2>
@@ -263,30 +258,46 @@ function RoutineEditor({
               <span className="mr-2 text-[var(--muted)]">{i + 1}.</span>
               {s.product?.name ?? s.label}
             </span>
-            <form action={removeRoutineStepAction}>
-              <input type="hidden" name="id" value={s.id} />
-              <button className="text-xs text-[var(--bad)]" type="submit">
-                Remove
-              </button>
-            </form>
+            <div className="flex items-center gap-1">
+              <form action={moveRoutineStepAction}>
+                <input type="hidden" name="id" value={s.id} />
+                <input type="hidden" name="direction" value="up" />
+                <button
+                  className="btn btn-ghost px-2 py-1 text-xs"
+                  type="submit"
+                  aria-label={`Move ${period} step ${i + 1} up`}
+                  disabled={i === 0}
+                >
+                  ↑
+                </button>
+              </form>
+              <form action={moveRoutineStepAction}>
+                <input type="hidden" name="id" value={s.id} />
+                <input type="hidden" name="direction" value="down" />
+                <button
+                  className="btn btn-ghost px-2 py-1 text-xs"
+                  type="submit"
+                  aria-label={`Move ${period} step ${i + 1} down`}
+                  disabled={i === steps.length - 1}
+                >
+                  ↓
+                </button>
+              </form>
+              <form action={removeRoutineStepAction}>
+                <input type="hidden" name="id" value={s.id} />
+                <button className="text-xs text-[var(--bad)]" type="submit">
+                  Remove
+                </button>
+              </form>
+            </div>
           </li>
         ))}
       </ol>
-      <form action={addRoutineStepAction} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-        <input type="hidden" name="period" value={period} />
-        <select className="field" name="productId" defaultValue="">
-          <option value="">Shelf product…</option>
-          {products.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        <input className="field" name="label" placeholder="Or free-text step" />
-        <button className="btn btn-primary" type="submit">
-          Add step
-        </button>
-      </form>
+      <AddRoutineStepForm
+        period={period}
+        products={products}
+        moisturizerCount={moisturizerCount}
+      />
     </section>
   );
 }
